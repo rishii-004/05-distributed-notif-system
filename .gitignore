@@ -1,0 +1,13 @@
+# Environment variables (may contain credentials)
+.env
+
+# Build output
+/server
+/worker
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
