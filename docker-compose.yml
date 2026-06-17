@@ -1,6 +1,6 @@
 # Docker Compose file for the distributed notification system.
-# Phase 2: RabbitMQ as the message broker.
-# Future phases will add Redis and PostgreSQL here.
+# Phase 3: RabbitMQ + Redis.
+# Future phases will add PostgreSQL.
 
 services:
   rabbitmq:
@@ -9,3 +9,9 @@ services:
     ports:
       - "5672:5672"   # AMQP protocol port (used by the Go clients)
       - "15672:15672" # Management UI (http://localhost:15672, guest/guest)
+
+  redis:
+    image: redis:7-alpine
+    container_name: notif-redis
+    ports:
+      - "6379:6379"   # Redis protocol port (used by the analytics worker)

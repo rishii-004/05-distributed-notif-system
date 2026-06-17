@@ -19,7 +19,7 @@ func main() {
 	// Load configuration from .env and environment variables
 	cfg := config.Load()
 
-	// Open a TCP connection to RabbitMQ
+	// Open a TCP connection to RabbitMQ -- persistent connection
 	conn, err := broker.Connect(cfg.Broker)
 	if err != nil {
 		log.Fatalf("broker connection failed: %v", err)
@@ -34,7 +34,7 @@ func main() {
 	defer ch.Close()
 
 	// Ensure the exchange, queue, and binding exist (idempotent)
-	if err := broker.DeclareTopology(ch); err != nil {
+	if err := broker.DeclareExchange(ch); err != nil {
 		log.Fatalf("topology declaration failed: %v", err)
 	}
 

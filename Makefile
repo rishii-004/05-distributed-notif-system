@@ -1,7 +1,7 @@
 # Makefile provides convenient shortcuts for infrastructure lifecycle.
 # Use `make infra-up` before starting the server and worker.
 
-.PHONY: infra-up infra-down
+.PHONY: infra-up infra-down infra-reset
 
 # Start all Docker services defined in docker-compose.yml (detached)
 infra-up:
@@ -10,3 +10,7 @@ infra-up:
 # Stop and remove all Docker containers started by infra-up
 infra-down:
 	docker compose down
+
+# Full reset — nukes data volumes so exchanges/queues are recreated fresh
+infra-reset:
+	docker compose down -v

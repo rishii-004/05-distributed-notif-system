@@ -1,6 +1,7 @@
 // Package broker wraps RabbitMQ (amqp091-go) connectivity and topology.
-// It provides high-level helpers so the rest of the app never deals with
-// AMQP wire-protocol details directly.
+// Phase 2 used a direct exchange with a single queue.
+// Phase 3 switches to a fanout exchange so multiple worker types each get
+// their own queue and receive every event independently.
 package broker
 
 import (
@@ -13,18 +14,12 @@ import (
 	"github.com/i-katta/notif-system/internal/model"
 )
 
-// RabbitMQ topology constants.
-// Using a direct exchange with a single bound queue keeps things simple for
-// Phase 2 while still being flexible enough to add routing later.
 const (
-	ExchangeName = "events"         // Direct exchange that receives all events
-	ExchangeKind = "direct"         // Exchange type — routes by exact routing key
-	QueueName    = "notifications"  // Queue that workers consume from
-	RoutingKey   = "event.created"  // Key used to route events from exchange → queue
+	ExchangeName = "notif.events" // Fanout exchange — broadcasts every event to all bound queues
+	ExchangeKind = "fanout"       // Exchange type: routes messages to every bound queue
 )
 
 // Connect opens a TCP connection to RabbitMQ.
-// Callers should defer conn.Close() and create ephemeral channels via conn.Channel().
 func Connect(url string) (*amqp.Connection, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
@@ -33,30 +28,40 @@ func Connect(url string) (*amqp.Connection, error) {
 	return conn, nil
 }
 
-// DeclareTopology ensures the exchange, queue, and binding exist.
-// Idempotent — safe to call from both publisher and consumer processes.
-func DeclareTopology(ch *amqp.Channel) error {
-	// Create a direct exchange named "events"
-	if err := ch.ExchangeDeclare(ExchangeName, ExchangeKind, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("failed to declare exchange: %w", err)
-	}
+// DeclareExchange creates the fanout exchange (idempotent).
+// Must be called before any DeclareAndBind or PublishEvent call.
+func DeclareExchange(ch *amqp.Channel) error {
+	return ch.ExchangeDeclare(
+		ExchangeName,
+		ExchangeKind,
+		true,  // durable — survives broker restart
+		false, // auto-deleted
+		false, // internal
+		false, // no-wait
+		nil,
+	)
+}
 
-	// Create a durable queue named "notifications"
-	q, err := ch.QueueDeclare(QueueName, true, false, false, false, nil)
+// DeclareAndBind creates a named, durable queue and binds it to the fanout
+// exchange. Each worker type should use its own queue name.
+func DeclareAndBind(ch *amqp.Channel, queueName string) error {
+	_, err := ch.QueueDeclare(
+		queueName,
+		true,  // durable
+		false, // auto-delete
+		false, // exclusive
+		false, // no-wait
+		nil,
+	)
 	if err != nil {
-		return fmt.Errorf("failed to declare queue: %w", err)
+		return fmt.Errorf("failed to declare queue %s: %w", queueName, err)
 	}
 
-	// Bind the queue to the exchange with the routing key
-	if err := ch.QueueBind(q.Name, RoutingKey, ExchangeName, false, nil); err != nil {
-		return fmt.Errorf("failed to bind queue: %w", err)
-	}
-
-	return nil
+	return ch.QueueBind(queueName, "", ExchangeName, false, nil)
 }
 
 // PublishEvent serialises an event to JSON and publishes it to the exchange.
-// The worker consumers will receive it from the bound queue.
+// With a fanout exchange, every bound queue receives the event.
 func PublishEvent(ch *amqp.Channel, event model.Event) error {
 	body, err := json.Marshal(event)
 	if err != nil {
@@ -66,9 +71,9 @@ func PublishEvent(ch *amqp.Channel, event model.Event) error {
 	return ch.PublishWithContext(
 		context.Background(),
 		ExchangeName,
-		RoutingKey,
-		false, // mandatory — don't return if no queue is bound
-		false, // immediate — don't return if no consumer is ready
+		"",    // routing key is ignored by fanout exchanges
+		false, // mandatory
+		false, // immediate
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        body,
@@ -76,20 +81,20 @@ func PublishEvent(ch *amqp.Channel, event model.Event) error {
 	)
 }
 
-// ConsumeEvents registers a consumer on the notifications queue and returns
-// a Go channel of AMQP deliveries. The caller should range over this channel.
-func ConsumeEvents(ch *amqp.Channel) (<-chan amqp.Delivery, error) {
+// Consume registers a consumer on the given queue and returns a Go channel
+// of AMQP deliveries.
+func Consume(ch *amqp.Channel, queueName string) (<-chan amqp.Delivery, error) {
 	msgs, err := ch.Consume(
-		QueueName,
+		queueName,
 		"",     // consumer tag — auto-generated
-		true,   // auto-ack — acknowledge immediately after delivery
-		false,  // exclusive — allow other consumers on the same queue
-		false,  // no-local — not used in Go RabbitMQ client
-		false,  // no-wait — wait for server confirmation
-		nil,    // arguments
+		true,   // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start consumer: %w", err)
+		return nil, fmt.Errorf("failed to start consumer on %s: %w", queueName, err)
 	}
 	return msgs, nil
 }
